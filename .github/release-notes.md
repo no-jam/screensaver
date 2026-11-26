@@ -3,17 +3,18 @@ Two downloads:
 - **Nojam.saver.zip**, the screensaver: Suprematist compositions in 3D that slowly drift, or shuffle, into new pictures.
 - **Nojam.heic**, a dynamic wallpaper: the same world through one day. The shapes move into a new composition every six hours, the shadows follow the sun, and at night the colours turn dark and the sun becomes a moon.
 
-### Install the screensaver
+### Install (one line in Terminal)
 
-1. Unzip `Nojam.saver.zip`.
-2. In Terminal: `xattr -dr com.apple.quarantine ~/Downloads/Nojam.saver` (this build is not notarized by Apple yet; this tells macOS you trust it).
-3. Double-click `Nojam.saver`, choose *Install for this user only*.
-4. System Settings, Wallpaper, **Screen Saver…**, scroll to **Other** (click *Show All*), choose **Nojam**. **Options…** sets Drift or Shuffle, colours and pace.
+```sh
+curl -fsSL https://raw.githubusercontent.com/no-jam/screensaver/main/install.sh | sh
+```
 
-If macOS says it could not verify Nojam.saver: System Settings, Privacy & Security, **Open Anyway**.
+It puts the screensaver in `~/Library/Screen Savers` and the wallpaper in `~/Pictures`. Files fetched with curl are not flagged by macOS, so there is no "could not verify" warning. Run it again to update.
 
-### Install the wallpaper
+Then:
+- **Screensaver:** System Settings, Wallpaper, **Screen Saver…**, scroll to **Other** (click *Show All*), choose **Nojam**. **Options…** sets Drift or Shuffle, colours and pace.
+- **Wallpaper:** System Settings, Wallpaper, **Add Photo…**, choose `Nojam.heic` in Pictures, then **Dynamic** in the menu next to it.
 
-1. Move `Nojam.heic` somewhere it can stay, such as Pictures.
-2. System Settings, Wallpaper, **Add Photo…**, choose `Nojam.heic`.
-3. In the menu next to the picture, choose **Dynamic** (it follows the time of day), or Light or Dark (always noon or midnight).
+### Install by hand
+
+Download the files below. Before opening the screensaver, run `xattr -dr com.apple.quarantine ~/Downloads/Nojam.saver` (it is not notarized by Apple yet), then double-click it.

@@ -48,7 +48,19 @@ In System Settings, Screen Saver, Nojam, **Options…**:
   the ground, softer the higher it floats.
 - Light colours are dithered so the ground shows no banding.
 
-## Build and install
+## Install
+
+One line in Terminal installs the latest release (screensaver and wallpaper):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/no-jam/screensaver/main/install.sh | sh
+```
+
+Files fetched with curl are not flagged by macOS, so it opens without a Gatekeeper warning. The
+script (`install.sh`) only writes to `~/Library/Screen Savers` and `~/Pictures`; run it again to
+update. To remove: `rm -rf ~/Library/Screen\ Savers/Nojam.saver ~/Pictures/Nojam.heic`.
+
+## Build and install from source
 
 You need macOS 12 or newer and the Xcode command line tools (`xcode-select --install`).
 
@@ -85,6 +97,7 @@ Add `&seed=anything` to always start from the same picture.
 | `macos/NojamSaverView.swift` | The screensaver: shows the page in a WKWebView, the Options sheet. |
 | `macos/Info.plist`, `macos/thumbnail*.png` | Bundle details and the thumbnail in System Settings. |
 | `build.sh` | Builds, signs and zips `Nojam.saver`. |
+| `install.sh` | The one-line install: latest release into your Library and Pictures. |
 | `wallpaper/render.mjs`, `wallpaper/heic.py` | Render the day's 16 pictures and pack them into `Nojam.heic`. |
 
 The compositions follow the same rules as the pictures on [nojam.io](https://nojam.io), with
