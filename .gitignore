@@ -3,3 +3,4 @@ dist/
 wallpaper/frames/
 wallpaper/*.heic
 node_modules/
+wallpaper/frames*/

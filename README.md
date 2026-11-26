@@ -8,25 +8,31 @@ into a new picture. The pictures are generated, so no two are the same.
 ![Day](docs/preview-day.jpg)
 ![Night](docs/preview-night.jpg)
 
-## Dynamic wallpaper
+## Dynamic wallpapers
 
-`Nojam.heic` is a macOS dynamic wallpaper of the same world through one day: 16 pictures, one
-every 90 minutes, which macOS blends as the hours pass. The shapes move into a new composition
-every six hours; the shadows follow the sun (long from the left in the morning, short at noon,
-long to the right in the evening, warm at dawn and dusk); at night the colours turn dark and the
-ochre sun becomes a pale moon. Each picture is 6016 x 3384.
+The same world through one day, a new composition every hour (24 pictures of 6016 x 3384),
+with the light of that hour: long shadows from the left in the morning, short at noon, long to
+the right in the evening, warm at dawn and dusk. Four files:
 
-Install: put `Nojam.heic` somewhere it can stay, then System Settings, Wallpaper, **Add Photo…**,
-and choose **Dynamic** in the menu next to it.
+| File | Colours |
+| --- | --- |
+| `Nojam.heic` | Day colours by day, night colours and a pale moon after dark (follows the clock). |
+| `Nojam-Light.heic` | Day colours all day. |
+| `Nojam-Dark.heic` | Night colours all day, the moon highest at midnight. |
+| `Nojam-Auto.heic` | Follows the Light/Dark appearance setting (two pictures: noon and midnight). |
 
-Build it yourself (Node 22 with Playwright, Python with Pillow and pillow-heif):
+Install: the one-line install below puts them in `~/Pictures/Nojam`. Then System Settings,
+Wallpaper, **Add Folder…**, and choose one: **Dynamic** in the menu next to it for the first
+three, **Automatic** for Nojam-Auto.
+
+Build them yourself (Node 22 with Playwright, Python with Pillow and pillow-heif):
 
 ```sh
-node wallpaper/render.mjs          # 16 frames into wallpaper/frames/, rendered by web/index.html
-python3 wallpaper/heic.py          # packs them into wallpaper/Nojam.heic with the day schedule
+for tone in auto light dark; do node wallpaper/render.mjs 6016 3384 24 nojam $tone; done
+python3 wallpaper/heic.py          # packs the four .heic files with their schedules
 ```
 
-`index.html?wall=0.5&seed=nojam` shows any time of day in a browser (0 midnight, 0.5 noon).
+`index.html?wall=0.5&tone=light&seed=nojam` shows any hour in a browser (0 midnight, 0.5 noon).
 
 ## Options
 
@@ -50,15 +56,15 @@ In System Settings, Screen Saver, Nojam, **Options…**:
 
 ## Install
 
-One line in Terminal installs the latest release (screensaver and wallpaper):
+One line in Terminal installs the latest release (screensaver and wallpapers):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/no-jam/screensaver/main/install.sh | sh
 ```
 
 Files fetched with curl are not flagged by macOS, so it opens without a Gatekeeper warning. The
-script (`install.sh`) only writes to `~/Library/Screen Savers` and `~/Pictures`; run it again to
-update. To remove: `rm -rf ~/Library/Screen\ Savers/Nojam.saver ~/Pictures/Nojam.heic`.
+script (`install.sh`) only writes to `~/Library/Screen Savers` and `~/Pictures/Nojam`; run it again
+to update. To remove: `rm -rf ~/Library/Screen\ Savers/Nojam.saver ~/Pictures/Nojam`.
 
 ## Build and install from source
 
@@ -98,7 +104,7 @@ Add `&seed=anything` to always start from the same picture.
 | `macos/Info.plist`, `macos/thumbnail*.png` | Bundle details and the thumbnail in System Settings. |
 | `build.sh` | Builds, signs and zips `Nojam.saver`. |
 | `install.sh` | The one-line install: latest release into your Library and Pictures. |
-| `wallpaper/render.mjs`, `wallpaper/heic.py` | Render the day's 16 pictures and pack them into `Nojam.heic`. |
+| `wallpaper/render.mjs`, `wallpaper/heic.py` | Render the day's 24 pictures and pack the four wallpapers. |
 
 The compositions follow the same rules as the pictures on [nojam.io](https://nojam.io), with
 more shapes for a full screen. Our pictures are otherwise flat; the screensaver is the one place
@@ -107,7 +113,7 @@ they go 3D, on purpose.
 ## Releasing
 
 On GitHub choose Actions, Release, **Run workflow**, and type the version (such as `v1.0.2`).
-It builds `Nojam.saver.zip` on a Mac and `Nojam.heic` on Linux, then creates the tag and the
+It builds `Nojam.saver.zip` on a Mac and the four wallpapers on Linux, then creates the tag and the
 release on the latest `main` with both files and the notes in `.github/release-notes.md`.
 Pushing a tag or publishing a release by hand does the same.
 

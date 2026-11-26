@@ -1,7 +1,11 @@
 Two downloads:
 
 - **Nojam.saver.zip**, the screensaver: Suprematist compositions in 3D that slowly drift, or shuffle, into new pictures.
-- **Nojam.heic**, a dynamic wallpaper: the same world through one day. The shapes move into a new composition every six hours, the shadows follow the sun, and at night the colours turn dark and the sun becomes a moon.
+- Four wallpapers of the same world, a new composition every hour, with the light and shadows of that hour:
+  - **Nojam.heic**: day colours by day, night colours and a moon after dark (follows the clock).
+  - **Nojam-Light.heic**: day colours all day.
+  - **Nojam-Dark.heic**: night colours all day.
+  - **Nojam-Auto.heic**: follows your Light/Dark appearance setting.
 
 ### Install (one line in Terminal)
 
@@ -9,11 +13,11 @@ Two downloads:
 curl -fsSL https://raw.githubusercontent.com/no-jam/screensaver/main/install.sh | sh
 ```
 
-It puts the screensaver in `~/Library/Screen Savers` and the wallpaper in `~/Pictures`. Files fetched with curl are not flagged by macOS, so there is no "could not verify" warning. Run it again to update.
+It puts the screensaver in `~/Library/Screen Savers` and the wallpapers in `~/Pictures/Nojam`. Files fetched with curl are not flagged by macOS, so there is no "could not verify" warning. Run it again to update.
 
 Then:
 - **Screensaver:** System Settings, Wallpaper, **Screen Saver…**, scroll to **Other** (click *Show All*), choose **Nojam**. **Options…** sets Drift or Shuffle, colours and pace.
-- **Wallpaper:** System Settings, Wallpaper, **Add Photo…**, choose `Nojam.heic` in Pictures, then **Dynamic** in the menu next to it.
+- **Wallpaper:** System Settings, Wallpaper, **Add Folder…**, choose `Pictures/Nojam`, then pick one. For Nojam, Nojam-Light and Nojam-Dark choose **Dynamic** in the menu next to it; for Nojam-Auto, **Automatic**.
 
 ### Install by hand
 

@@ -35,10 +35,11 @@ jobs:
           npm install --no-save playwright@1.49.1
           npx playwright install --with-deps chromium
           pip install pillow pillow-heif
-      - run: node wallpaper/render.mjs 6016 3384 16 nojam
+      - run: |
+          for tone in auto light dark; do node wallpaper/render.mjs 6016 3384 24 nojam $tone; done
       - run: python3 wallpaper/heic.py
       - uses: actions/upload-artifact@v4
-        with: { name: wallpaper, path: wallpaper/Nojam.heic }
+        with: { name: wallpaper, path: wallpaper/*.heic }
   publish:
     needs: [saver, wallpaper]
     runs-on: ubuntu-latest
@@ -52,9 +53,9 @@ jobs:
           TAG: ${{ inputs.version || github.event.release.tag_name || github.ref_name }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" out/Nojam.saver.zip out/Nojam.heic --clobber
+            gh release upload "$TAG" out/Nojam.saver.zip out/*.heic --clobber
           else
-            gh release create "$TAG" out/Nojam.saver.zip out/Nojam.heic \
+            gh release create "$TAG" out/Nojam.saver.zip out/*.heic \
               --target "$GITHUB_SHA" --title "Nojam screensaver and wallpaper $TAG" \
               --notes-file .github/release-notes.md
           fi
