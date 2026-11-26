@@ -606,7 +606,7 @@
     camAmp += ((shuffle ? 1.35 : 1) - camAmp) * (1 - Math.exp(-dt));
     camPhase += dt * cfg.pace * (0.045 + (shuffle ? 0.03 + 0.22 * swing : 0));
     mouse.x += (mouse.tx - mouse.x) * (1 - Math.exp(-dt * 3)); mouse.y += (mouse.ty - mouse.y) * (1 - Math.exp(-dt * 3));
-    const aspect = vw / vh;
+    const aspect = WALL && WALL.aspect ? WALL.aspect : vw / vh; // a scene piece keeps the whole view's shape
     const D = WALL && WALL.fit ? (H / 2) / Math.tan(FOV / 2) // the ground fills the view exactly
       : (H * 0.56) / Math.tan(FOV / 2) * Math.max(1, 1.6 / aspect) * (1 + 0.04 * Math.sin(camPhase * 0.41) + 0.08 * swing);
     const ax = 0.17 * H * camAmp, ay = 0.12 * H * camAmp;
@@ -626,9 +626,12 @@
     // Light from the upper left, turning a little over the minutes.
     const la = WALL ? WALL.la : 2.25 + 0.12 * Math.sin(time * 0.013), le = WALL ? WALL.le : 0.98 + 0.06 * Math.sin(time * 0.009);
     const L = V.norm([Math.cos(la) * Math.cos(le), Math.sin(la) * Math.cos(le), Math.sin(le) * 1.6]);
-    const R = 0.62 * Math.hypot(W, H) + 300;
-    const lEye = [L[0] * 4000, L[1] * 4000, L[2] * 4000];
-    const lvp = M4.mul(M4.ortho(-R, R, -R, R, 1500, 6500), M4.lookAt(lEye, [0, 0, 0], [0, 0, 1]));
+    // The shadow map covers the whole picture, or (a scene piece) just the ground under the piece,
+    // so the shadows stay sharp however large the whole picture is.
+    const focus = WALL && WALL.shadow ? WALL.shadow : { x: 0, y: 0, r: 0.62 * Math.hypot(W, H) + 300 };
+    const R = focus.r, fc = [focus.x, focus.y, 0];
+    const lEye = [fc[0] + L[0] * 4000, fc[1] + L[1] * 4000, L[2] * 4000];
+    const lvp = M4.mul(M4.ortho(-R, R, -R, R, 1500, 6500), M4.lookAt(lEye, fc, [0, 0, 1]));
     const depthRange = 5000, worldPerUv = 2 * R, soft = 0.06;
 
     // Shape transforms for this frame.
@@ -683,7 +686,8 @@
     gl.uniform3fv(u.uCam, eye);
     gl.uniform3fv(u.uAmbTop, pal.ambTop); gl.uniform3fv(u.uAmbBot, pal.ambBot); gl.uniform3fv(u.uLightCol, pal.light);
     gl.uniform1f(u.uPenK, (depthRange * soft) / worldPerUv);
-    gl.uniform1f(u.uSearch, 0.014); gl.uniform1f(u.uMinPen, 1.6 / SHADOW); gl.uniform1f(u.uMaxPen, 0.012);
+    // Shadow softness in world units, whatever area the shadow map covers.
+    gl.uniform1f(u.uSearch, 41 / worldPerUv); gl.uniform1f(u.uMinPen, 1.6 / SHADOW); gl.uniform1f(u.uMaxPen, 35 / worldPerUv);
     gl.uniform1f(u.uBias, 0.00025);
     gl.uniform1f(u.uVig, pal.vignette);
     gl.uniform1f(u.uSat, p3 ? 1 : 1.06);
@@ -731,8 +735,8 @@
     // shapes: [{t: 'box' | 'disc', col, x, y, z, w, h, d, deg, tx, ty}] in a W x H ground centred
     // on the origin, y up; the view shows exactly that ground. Light from la/le, as the wallpaper.
     const sc = cfg.scene;
-    WALL = { fit: true, region: sc.region || null, night: sc.night || 0, warm: sc.warm || 0, la: sc.la ?? 2.25, le: sc.le ?? 1.0 };
-    W = H * (vw / vh);
+    WALL = { fit: true, region: sc.region || null, aspect: sc.aspect || null, shadow: sc.shadow || null, night: sc.night || 0, warm: sc.warm || 0, la: sc.la ?? 2.25, le: sc.le ?? 1.0 };
+    W = H * (sc.aspect || vw / vh);
     slots.length = 0;
     for (const o of sc.shapes) slots.push({ type: o.t, cur: { tx: 0, ty: 0, deg: 0, ...o }, tw: null, col: o.col, colFrom: o.col, ph: 0, mix: null });
     time = 10; render(1); window.__ready = true; canvas.classList.add('on'); canvas.style.transition = 'none'; return;
