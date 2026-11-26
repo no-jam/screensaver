@@ -1,0 +1,20 @@
+# Builds Nojam.saver on a Mac for every push and keeps the zip as a download on the run.
+name: Build
+on:
+  push:
+    branches: ['**']
+    tags-ignore: ['**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nojam.saver
+          path: dist/Nojam.saver.zip

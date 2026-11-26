@@ -33,25 +33,26 @@ In System Settings, Screen Saver, Nojam, **Options…**:
 You need macOS 12 or newer and the Xcode command line tools (`xcode-select --install`).
 
 ```sh
-./screensaver/build.sh install
+./build.sh install
 ```
 
-That builds `screensaver/dist/Nojam.saver` for Apple silicon and Intel, copies it to
+That builds `dist/Nojam.saver` for Apple silicon and Intel, copies it to
 `~/Library/Screen Savers`, and restarts the screensaver host. Then pick **Nojam** in System
 Settings, Screen Saver. Without `install` it only builds, and also writes `Nojam.saver.zip`.
 
-Every push that changes `screensaver/` also builds it on GitHub Actions (workflow
-"Screensaver"); the zip is attached to the run as a download.
+Ready-made builds are on the [Releases](https://github.com/no-jam/screensaver/releases) page:
+download `Nojam.saver.zip`, unzip it and double-click `Nojam.saver`. Every push also builds it on
+GitHub Actions (workflow "Build"), with the zip attached to the run.
 
-A copy built on another Mac or downloaded from Actions is only ad-hoc signed, so macOS warns
+A copy built on another Mac or downloaded from GitHub is only ad-hoc signed, so macOS warns
 when you open it. Either right-click it and choose Open, or run
 `xattr -dr com.apple.quarantine Nojam.saver` first. To share it widely, sign it with a Developer
-ID (`SIGN_IDENTITY="Developer ID Application: …" ./screensaver/build.sh`) and notarize the zip
+ID (`SIGN_IDENTITY="Developer ID Application: …" ./build.sh`) and notarize the zip
 with `xcrun notarytool`.
 
 ## Try it in a browser
 
-Open `screensaver/web/index.html` in Safari or Chrome. A small bar at the bottom switches motion
+Open `web/index.html` in Safari or Chrome. A small bar at the bottom switches motion
 and colours. Keys: Space for the next picture, M for motion, T for colours, F for full screen.
 The address takes the same settings: `index.html?mode=shuffle&theme=night&pace=1.5`.
 Add `&seed=anything` to always start from the same picture.
@@ -65,6 +66,21 @@ Add `&seed=anything` to always start from the same picture.
 | `macos/Info.plist`, `macos/thumbnail*.png` | Bundle details and the thumbnail in System Settings. |
 | `build.sh` | Builds, signs and zips `Nojam.saver`. |
 
-The compositions follow `lib/art.mjs` (the same rules as the site's pictures), with more shapes
-for a full screen. BRAND.md says our art is flat with no 3D. The screensaver is the one place we
-break that rule on purpose.
+The compositions follow the same rules as the pictures on [nojam.io](https://nojam.io), with
+more shapes for a full screen. Our pictures are otherwise flat; the screensaver is the one place
+they go 3D, on purpose.
+
+## Releasing
+
+Tag a version and push the tag; the "Release" workflow builds `Nojam.saver.zip` on a Mac and
+publishes it on the Releases page:
+
+```sh
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+Keep `CFBundleShortVersionString` in `macos/Info.plist` in step with the tag.
+
+## Licence
+
+Copyright © Nojam. All rights reserved. See [LICENSE](LICENSE).
