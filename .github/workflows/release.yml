@@ -1,20 +1,31 @@
-# Pushing a tag such as v1.0.0 builds Nojam.saver on a Mac and publishes it as a GitHub release.
+# Builds Nojam.saver on a Mac and attaches Nojam.saver.zip to a GitHub release. It runs when a
+# version tag such as v1.0.0 is pushed (and then creates the release), or when a release is
+# published on GitHub's website (and then adds the zip to it).
 name: Release
 on:
   push:
     tags: ['v*']
+  release:
+    types: [published]
 permissions:
   contents: write
+concurrency:
+  group: release-${{ github.ref_name }}
 jobs:
   release:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - run: ./build.sh
-      - name: Publish the release
+      - name: Publish the zip
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/Nojam.saver.zip \
-            --title "Nojam screensaver $GITHUB_REF_NAME" \
-            --notes "Unzip, then double-click Nojam.saver to install. This build is ad-hoc signed: the first time, right-click it and choose Open, or run: xattr -dr com.apple.quarantine Nojam.saver"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/Nojam.saver.zip --clobber
+          else
+            gh release create "$TAG" dist/Nojam.saver.zip \
+              --title "Nojam screensaver $TAG" \
+              --notes "Unzip, then double-click Nojam.saver to install. This build is ad-hoc signed: the first time, right-click it and choose Open, or run: xattr -dr com.apple.quarantine Nojam.saver"
+          fi
