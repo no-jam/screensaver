@@ -1,2 +1,5 @@
 dist/
 .DS_Store
+wallpaper/frames/
+wallpaper/*.heic
+node_modules/

@@ -1,31 +1,60 @@
-# Builds Nojam.saver on a Mac and attaches Nojam.saver.zip to a GitHub release. It runs when a
-# version tag such as v1.0.0 is pushed (and then creates the release), or when a release is
-# published on GitHub's website (and then adds the zip to it).
+# Builds the screensaver (on a Mac) and the dynamic wallpaper (on Linux) and attaches both to a
+# GitHub release. Runs when a version tag such as v1.0.2 is pushed, when a release is published
+# on GitHub's website, or by hand (Actions, Release, Run workflow, with a version such as v1.0.2),
+# which creates the tag and the release on the current commit of main.
 name: Release
 on:
   push:
     tags: ['v*']
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, such as v1.0.2'
+        required: true
 permissions:
   contents: write
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ inputs.version || github.event.release.tag_name || github.ref_name }}
 jobs:
-  release:
+  saver:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - run: ./build.sh
-      - name: Publish the zip
+      - uses: actions/upload-artifact@v4
+        with: { name: saver, path: dist/Nojam.saver.zip }
+  wallpaper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: |
+          npm install --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium
+          pip install pillow pillow-heif
+      - run: node wallpaper/render.mjs 6016 3384 16 nojam
+      - run: python3 wallpaper/heic.py
+      - uses: actions/upload-artifact@v4
+        with: { name: wallpaper, path: wallpaper/Nojam.heic }
+  publish:
+    needs: [saver, wallpaper]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          TAG: ${{ inputs.version || github.event.release.tag_name || github.ref_name }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/Nojam.saver.zip --clobber
+            gh release upload "$TAG" out/Nojam.saver.zip out/Nojam.heic --clobber
           else
-            gh release create "$TAG" dist/Nojam.saver.zip \
-              --title "Nojam screensaver $TAG" \
-              --notes "Unzip, then double-click Nojam.saver to install. This build is ad-hoc signed: the first time, right-click it and choose Open, or run: xattr -dr com.apple.quarantine Nojam.saver"
+            gh release create "$TAG" out/Nojam.saver.zip out/Nojam.heic \
+              --target "$GITHUB_SHA" --title "Nojam screensaver and wallpaper $TAG" \
+              --notes-file .github/release-notes.md
           fi

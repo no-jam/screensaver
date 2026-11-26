@@ -63,6 +63,8 @@
     quality: +(given.quality || q.get('quality') || 1), // multiplies the pixel ratio
     seed: given.seed || q.get('seed') || String(Date.now() ^ (Math.random() * 1e9)),
     still: q.get('still') != null, // for thumbnails: render a settled picture, no intro
+    // For the dynamic wallpaper: render one still frame at this time of day (0 = midnight, 0.5 = noon).
+    wall: q.get('wall') != null ? ((+q.get('wall') % 1) + 1) % 1 : null,
   };
 
   // ---------------------------------------------------------------- random (as lib/art.mjs)
@@ -283,7 +285,7 @@
 
   // ---------------------------------------------------------------- GL
   const canvas = document.getElementById('c');
-  const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, depth: true, powerPreference: 'high-performance', preserveDrawingBuffer: cfg.still });
+  const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, depth: true, powerPreference: 'high-performance', preserveDrawingBuffer: cfg.still || cfg.wall != null });
   if (!gl) { document.getElementById('msg').style.display = 'grid'; return; }
   let p3 = false;
   if ('drawingBufferColorSpace' in gl && window.matchMedia && matchMedia('(color-gamut: p3)').matches) {
@@ -503,13 +505,65 @@
     return e;
   }
 
+  // ---------------------------------------------------------------- dynamic wallpaper
+  // One day in four pictures: midnight, 6:00, noon and 18:00 are settled compositions, and the
+  // hours between are the shapes on their way from one to the next. The light follows the sun:
+  // long shadows from the left in the morning, short at noon, long to the right in the evening,
+  // warm at dawn and dusk; at night the night colours, and the ochre sun becomes a pale moon.
+  let WALL = null;
+  const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+  function setUpWall(t) {
+    const h = t * 24;
+    const dayU = (h - 6.5) / 12; // sunrise 6:30, sunset 18:30
+    const alt = Math.sin(Math.PI * dayU);
+    const night = dayU < 0 || dayU > 1 ? 1 : smooth(0.16, -0.06, alt);
+    const nightU = (((h - 18.5) % 24) + 24) % 24 / 12; // the moon, 18:30 to 6:30
+    const warm = (1 - night) * (1 - smooth(0.12, 0.55, alt));
+    const sunLa = Math.PI * (0.94 - 0.88 * clamp01(dayU)), sunLe = 0.34 + 0.95 * Math.max(0, alt);
+    const moonLa = Math.PI * (0.94 - 0.88 * clamp01(nightU)), moonLe = 0.55 + 0.55 * Math.sin(Math.PI * clamp01(nightU));
+    WALL = { night, warm, la: night > 0.5 ? moonLa : sunLa, le: night > 0.5 ? moonLe : sunLe };
+
+    // The shapes: between two of the four settled pictures.
+    const K = 4, pos = t * K, k0 = Math.floor(pos) % K, k1 = (k0 + 1) % K, f = pos - Math.floor(pos);
+    const keys = [0, 1, 2, 3].map((k) => compose(rng(`${cfg.seed}:wall:${k}`), W, H));
+    time = 10;
+    slots.forEach((sl, i) => {
+      let a = keys[k0][i], b = keys[k1][i];
+      if (!a && !b) { sl.cur = null; sl.tw = null; return; }
+      a = a ? { ...a } : { ...ZERO(b) };
+      b = b ? { ...b } : { ...ZERO(a) };
+      if (sl.type === 'box') { while (b.deg - a.deg > 90) b.deg -= 180; while (b.deg - a.deg < -90) b.deg += 180; }
+      sl.tw = { from: a, to: b, t0: time - f, delay: 0, dur: 1, ease: ease.inOut, lift: 30, spin: 0, flip: 0, roll: 0, cw: [0.55, 0.7] }; // colours change between frames, never halfway
+      sl.colFrom = a.col; sl.col = b.col; sl.mix = null;
+      sl.cur = { ...a };
+    });
+    // The sun crosses the picture by day, the moon by night.
+    const sun = slots[3];
+    const u = night > 0.5 ? clamp01(nightU) : clamp01(dayU);
+    const at = { x: (-0.4 + 0.8 * u) * W, y: (-0.12 + 0.46 * Math.sin(Math.PI * u)) * H };
+    for (const o of [sun.tw.from, sun.tw.to]) Object.assign(o, at);
+    sun.tw.from.col = 'ochre'; sun.tw.to.col = 'paper';
+    sun.colFrom = 'ochre'; sun.col = 'paper'; sun.mix = night;
+  }
+  function wallPalette() {
+    const d = LIN.day, n = LIN.night, k = WALL.night, w = WALL.warm;
+    const mix = (a, b) => (Array.isArray(a) ? a.map((v, i) => v + (b[i] - v) * k) : a + (b - a) * k);
+    for (const key of [...COLOR_KEYS, 'ambTop', 'ambBot', 'light', 'vignette', 'spec']) pal[key] = mix(d[key], n[key]);
+    const tint = (c, t, amt) => c.map((v, i) => v * (1 + (t[i] - 1) * amt));
+    pal.light = tint(pal.light, [1.05, 0.8, 0.55], w);
+    pal.ambTop = tint(pal.ambTop, [1.0, 0.93, 0.86], w * 0.6);
+    pal.ground = tint(pal.ground, [1.0, 0.93, 0.84], w * 0.55);
+    pal.backdrop = tint(pal.backdrop, [1.03, 0.96, 0.92], w * 0.4);
+    pal.vignette += 0.12 * w;
+  }
+
   // ---------------------------------------------------------------- frame
   let dpr = 1, vw = 1, vh = 1;
   function resize() {
     const ratio = Math.min(3, (window.devicePixelRatio || 1) * cfg.quality);
     // Very large screens: keep below ~16 MP so 60 fps holds on any recent Mac.
     const css = [window.innerWidth || 800, window.innerHeight || 500];
-    dpr = Math.min(ratio, Math.sqrt(16.5e6 / (css[0] * css[1])));
+    dpr = cfg.wall != null ? ratio : Math.min(ratio, Math.sqrt(16.5e6 / (css[0] * css[1])));
     vw = Math.round(css[0] * dpr); vh = Math.round(css[1] * dpr);
     if (canvas.width !== vw || canvas.height !== vh) { canvas.width = vw; canvas.height = vh; }
     W = H * Math.max(1, css[0] / css[1]);
@@ -522,7 +576,7 @@
   const FOV = 30 * D2R;
 
   function render(dt) {
-    easePalette(1 - Math.exp(-dt * 2.5));
+    if (WALL) wallPalette(); else easePalette(1 - Math.exp(-dt * 2.5));
     const env = clamp01((time - burst.t0) / burst.span);
     const swing = time - burst.t0 < burst.span ? Math.sin(Math.PI * env) : 0;
 
@@ -534,14 +588,15 @@
     const aspect = vw / vh;
     const D = (H * 0.56) / Math.tan(FOV / 2) * Math.max(1, 1.6 / aspect) * (1 + 0.04 * Math.sin(camPhase * 0.41) + 0.08 * swing);
     const ax = 0.17 * H * camAmp, ay = 0.12 * H * camAmp;
-    const eye = [ax * Math.sin(camPhase) + mouse.x * 260, ay * Math.sin(camPhase * 0.73 + 1.3) + mouse.y * 180, D];
-    const look = [0.25 * ax * Math.sin(camPhase * 0.6 + 2), 0.25 * ay * Math.cos(camPhase * 0.5), 60];
-    const roll = 0.018 * Math.sin(camPhase * 0.33) + 0.03 * swing * Math.sin(burst.t0);
+    // The wallpaper keeps one view all day: a little from the lower left, so the slabs show their depth.
+    const eye = WALL ? [-0.07 * H, -0.06 * H, D] : [ax * Math.sin(camPhase) + mouse.x * 260, ay * Math.sin(camPhase * 0.73 + 1.3) + mouse.y * 180, D];
+    const look = WALL ? [0, 0, 60] : [0.25 * ax * Math.sin(camPhase * 0.6 + 2), 0.25 * ay * Math.cos(camPhase * 0.5), 60];
+    const roll = WALL ? 0 : 0.018 * Math.sin(camPhase * 0.33) + 0.03 * swing * Math.sin(burst.t0);
     const view = M4.lookAt(eye, look, [Math.sin(roll), Math.cos(roll), 0]);
     const vp = M4.mul(M4.persp(FOV, aspect, 200, 12000), view);
 
     // Light from the upper left, turning a little over the minutes.
-    const la = 2.25 + 0.12 * Math.sin(time * 0.013), le = 0.98 + 0.06 * Math.sin(time * 0.009);
+    const la = WALL ? WALL.la : 2.25 + 0.12 * Math.sin(time * 0.013), le = WALL ? WALL.le : 0.98 + 0.06 * Math.sin(time * 0.009);
     const L = V.norm([Math.cos(la) * Math.cos(le), Math.sin(la) * Math.cos(le), Math.sin(le) * 1.6]);
     const R = 0.62 * Math.hypot(W, H) + 300;
     const lEye = [L[0] * 4000, L[1] * 4000, L[2] * 4000];
@@ -554,9 +609,10 @@
       step(sl);
       const c = sl.cur;
       if (!c || c.w < 0.5 || c.h < 0.5) continue;
-      const bob = Math.sin(time * 0.35 + sl.ph) * (4 + c.z * 0.02);
-      const tx = (c.tx + Math.sin(time * 0.27 + sl.ph * 1.3) * 1.2 + (c.flip || 0)) * D2R;
-      const ty = (c.ty + Math.cos(time * 0.23 + sl.ph) * 1.2 + (c.roll || 0)) * D2R;
+      const still = WALL ? 0 : 1;
+      const bob = still * Math.sin(time * 0.35 + sl.ph) * (4 + c.z * 0.02);
+      const tx = (c.tx + still * Math.sin(time * 0.27 + sl.ph * 1.3) * 1.2 + (c.flip || 0)) * D2R;
+      const ty = (c.ty + still * Math.cos(time * 0.23 + sl.ph) * 1.2 + (c.roll || 0)) * D2R;
       // A tilted slab dips at one corner: keep that corner above the ground.
       const dip = 0.5 * (Math.abs(Math.sin(tx)) * c.h + Math.abs(Math.sin(ty)) * c.w) + c.d / 2 + 1;
       const z = Math.max(dip, c.z + (c.zLift || 0) + bob);
@@ -564,7 +620,7 @@
       const e = sl.tw ? clamp01((time - sl.tw.t0 - sl.tw.delay) / sl.tw.dur) : 1;
       const ca = pal[sl.colFrom] || pal.ink, cb = pal[c.col] || pal.ink;
       const cw = sl.tw ? sl.tw.cw : [0, 1];
-      const ce = ease.inOut(clamp01((e - cw[0]) / (cw[1] - cw[0])));
+      const ce = sl.mix != null ? sl.mix : ease.inOut(clamp01((e - cw[0]) / (cw[1] - cw[0])));
       draws.push({ mesh: MESH[sl.type], m: model.slice(), n: nmat.slice(), col: [lerp(ca[0], cb[0], ce), lerp(ca[1], cb[1], ce), lerp(ca[2], cb[2], ce)] });
     }
 
@@ -627,29 +683,47 @@
   // ---------------------------------------------------------------- loop
   const HOLD = { drift: 15, shuffle: 6.5 };
   let running = true, last = 0, raf = 0;
-  function frame(now) {
-    raf = 0;
-    if (!running) return;
+  // One step of the animation. The browser's frame callback drives it; inside the macOS
+  // screensaver WebKit may treat the page as hidden and stop those callbacks, so the saver also
+  // calls nojam.tick() on its own timer, which draws a frame whenever the browser has not.
+  function advance(now) {
     const dt = last ? Math.min(0.1, (now - last) / 1000) : 1 / 60;
     last = now;
     time += dt * cfg.pace;
     if (time >= nextAt) { newPicture(cfg.mode); nextAt = time + HOLD[cfg.mode]; }
     render(dt);
+  }
+  function frame(now) {
+    raf = 0;
+    if (!running) return;
+    advance(performance.now());
     raf = requestAnimationFrame(frame);
   }
+  if (cfg.wall != null) { setUpWall(cfg.wall); render(1); window.__ready = true; canvas.classList.add('on'); canvas.style.transition = 'none'; return; }
   newPicture('intro');
   nextAt = cfg.still ? Infinity : 6;
   if (cfg.still) { time = 10; render(1); window.__ready = true; canvas.classList.add('on'); canvas.style.transition = 'none'; return; }
+  if (cfg.saver) {
+    // No CSS fade in the saver: a hidden page may never run the transition and stay black.
+    canvas.style.transition = 'none';
+    canvas.classList.add('on');
+  } else {
+    requestAnimationFrame(() => canvas.classList.add('on'));
+  }
   raf = requestAnimationFrame(frame);
-  requestAnimationFrame(() => canvas.classList.add('on'));
 
   canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); running = false; });
   canvas.addEventListener('webglcontextrestored', () => location.reload());
 
-  // The saver calls these on start, stop and settings changes.
+  // The saver calls these on start, stop and settings changes, and tick() on its own timer.
   window.nojam = {
     pause() { running = false; last = 0; if (raf) cancelAnimationFrame(raf); raf = 0; },
-    resume() { if (!running) { running = true; raf = requestAnimationFrame(frame); } },
+    resume() { if (!running) { running = true; last = 0; raf = requestAnimationFrame(frame); } },
+    tick() {
+      if (!running) return;
+      const now = performance.now();
+      if (now - last > 25) advance(now);
+    },
     set(o) {
       const modeChanged = o.mode && o.mode !== cfg.mode;
       Object.assign(cfg, o);
@@ -658,7 +732,8 @@
     },
     next() { nextAt = time; },
   };
-  document.addEventListener('visibilitychange', () => (document.hidden ? window.nojam.pause() : window.nojam.resume()));
+  // In a browser, stop when the tab is hidden. In the saver, only the saver starts and stops it.
+  if (!cfg.saver) document.addEventListener('visibilitychange', () => (document.hidden ? window.nojam.pause() : window.nojam.resume()));
 
   // ---------------------------------------------------------------- browser preview controls
   const bar = document.getElementById('bar');

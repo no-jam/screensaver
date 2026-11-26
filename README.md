@@ -8,6 +8,26 @@ into a new picture. The pictures are generated, so no two are the same.
 ![Day](docs/preview-day.jpg)
 ![Night](docs/preview-night.jpg)
 
+## Dynamic wallpaper
+
+`Nojam.heic` is a macOS dynamic wallpaper of the same world through one day: 16 pictures, one
+every 90 minutes, which macOS blends as the hours pass. The shapes move into a new composition
+every six hours; the shadows follow the sun (long from the left in the morning, short at noon,
+long to the right in the evening, warm at dawn and dusk); at night the colours turn dark and the
+ochre sun becomes a pale moon. Each picture is 6016 x 3384.
+
+Install: put `Nojam.heic` somewhere it can stay, then System Settings, Wallpaper, **Add Photo…**,
+and choose **Dynamic** in the menu next to it.
+
+Build it yourself (Node 22 with Playwright, Python with Pillow and pillow-heif):
+
+```sh
+node wallpaper/render.mjs          # 16 frames into wallpaper/frames/, rendered by web/index.html
+python3 wallpaper/heic.py          # packs them into wallpaper/Nojam.heic with the day schedule
+```
+
+`index.html?wall=0.5&seed=nojam` shows any time of day in a browser (0 midnight, 0.5 noon).
+
 ## Options
 
 In System Settings, Screen Saver, Nojam, **Options…**:
@@ -65,6 +85,7 @@ Add `&seed=anything` to always start from the same picture.
 | `macos/NojamSaverView.swift` | The screensaver: shows the page in a WKWebView, the Options sheet. |
 | `macos/Info.plist`, `macos/thumbnail*.png` | Bundle details and the thumbnail in System Settings. |
 | `build.sh` | Builds, signs and zips `Nojam.saver`. |
+| `wallpaper/render.mjs`, `wallpaper/heic.py` | Render the day's 16 pictures and pack them into `Nojam.heic`. |
 
 The compositions follow the same rules as the pictures on [nojam.io](https://nojam.io), with
 more shapes for a full screen. Our pictures are otherwise flat; the screensaver is the one place
@@ -72,10 +93,10 @@ they go 3D, on purpose.
 
 ## Releasing
 
-Either push a version tag (`git tag v1.0.0 && git push origin v1.0.0`), or on GitHub choose
-Releases, Draft a new release, type a new tag such as `v1.0.0` on `main`, and publish. Either
-way the "Release" workflow builds `Nojam.saver.zip` on a Mac and attaches it to the release
-within a few minutes.
+On GitHub choose Actions, Release, **Run workflow**, and type the version (such as `v1.0.2`).
+It builds `Nojam.saver.zip` on a Mac and `Nojam.heic` on Linux, then creates the tag and the
+release on the latest `main` with both files and the notes in `.github/release-notes.md`.
+Pushing a tag or publishing a release by hand does the same.
 
 Keep `CFBundleShortVersionString` in `macos/Info.plist` in step with the tag.
 

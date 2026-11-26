@@ -5,9 +5,12 @@
 import AppKit
 import ScreenSaver
 import WebKit
+import os
+
+private let log = Logger(subsystem: "io.nojam.screensaver", category: "saver")
 
 @objc(NojamSaverView)
-final class NojamSaverView: ScreenSaverView {
+final class NojamSaverView: ScreenSaverView, WKNavigationDelegate {
     private static let moduleName = "io.nojam.screensaver"
     private var webView: WKWebView?
     private var sheet: NSWindow?
@@ -61,7 +64,9 @@ final class NojamSaverView: ScreenSaverView {
 
     private func setUp() {
         defaults?.register(defaults: ["mode": "drift", "theme": "auto", "pace": 1.0])
-        animationTimeInterval = 1.0 / 2.0 // the page animates itself; this only keeps the view alive
+        // The page animates itself, but in full screen WebKit may treat it as hidden and stop its
+        // frame callbacks; animateOneFrame then drives the page at this rate instead.
+        animationTimeInterval = 1.0 / 60.0
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
 
@@ -87,7 +92,12 @@ final class NojamSaverView: ScreenSaverView {
         let web = WKWebView(frame: bounds, configuration: config)
         web.autoresizingMask = [.width, .height]
         web.setValue(false, forKey: "drawsBackground") // no white flash before the first frame
+        // WebKit pauses pages it thinks are covered, and the screensaver window counts as covered.
+        if web.responds(to: NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")) {
+            web.setValue(false, forKey: "windowOcclusionDetectionEnabled")
+        }
         if #available(macOS 13.3, *) { web.isInspectable = false }
+        web.navigationDelegate = self
         addSubview(web)
         webView = web
 
@@ -95,6 +105,25 @@ final class NojamSaverView: ScreenSaverView {
         if let page = bundle.url(forResource: "index", withExtension: "html") {
             web.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
         }
+    }
+
+    // MARK: Navigation: log failures, and reload if WebKit's page process goes away.
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        log.info("page loaded, preview: \(self.isPreview, privacy: .public)")
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        log.error("page failed: \(error.localizedDescription, privacy: .public)")
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        log.error("page failed to load: \(error.localizedDescription, privacy: .public)")
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        log.error("web content process ended; reloading")
+        webView.reload()
     }
 
     private func run(_ js: String) {
@@ -121,7 +150,9 @@ final class NojamSaverView: ScreenSaverView {
         }
     }
 
-    override func animateOneFrame() {}
+    override func animateOneFrame() {
+        webView?.evaluateJavaScript("window.nojam && window.nojam.tick()", completionHandler: nil)
+    }
 
     override func draw(_ rect: NSRect) {
         NSColor.black.setFill()
