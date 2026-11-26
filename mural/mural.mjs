@@ -9,7 +9,7 @@
 // ss renders each picture ss times larger (default 2), and sheet.py scales it down: smoother
 // edges and shadows.
 //
-// Writes mural/out/tiles/01.png .. 31.png (reading order) and mural/out/scene.json. Each tile is
+// Writes the renders to mural/out/raw/ (sheet.py makes mural/out/tiles/1.jpg .. 31.jpg, reading order) and mural/out/scene.json. Each tile is
 // rendered on its own with the camera of the whole wall (web/index.html with window.NOJAM_SCENE),
 // so shapes and shadows run on across tile edges, at any size.
 import { createRequire } from 'node:module';
@@ -94,13 +94,43 @@ const LETTERS = {
 };
 [...'SUCCESS'].forEach((ch, i) => LETTERS[ch](i + 0.2, i + 0.8));
 
+// Small letters across the three bottom pictures, made the same way: "sw im", a third of the
+// height, the dot of the i an ochre disc.
+{
+  const t = 14, tu = t / UW, tv = t / UH; // thinner strokes
+  const y0 = 4.36, y1 = 4.72, ym = (y0 + y1) / 2;
+  const small = {
+    s: (a, b) => {
+      stroke(a, y0, b, y0 + tv); stroke(a, y0 + tv, a + tu, ym); stroke(a, ym - tv / 2, b, ym + tv / 2);
+      stroke(b - tu, ym, b, y1 - tv); stroke(a, y1 - tv, b, y1);
+    },
+    w: (a, b) => {
+      const m = (a + b) / 2;
+      stroke(a, y0, a + tu, y1 - tv); stroke(m - tu / 2, y0 + (y1 - y0) * 0.3, m + tu / 2, y1 - tv);
+      stroke(b - tu, y0, b, y1 - tv); stroke(a, y1 - tv, b, y1);
+    },
+    i: (a, b) => {
+      const m = (a + b) / 2;
+      stroke(m - tu / 2, y0, m + tu / 2, y1);
+      disc('ochre', m, y0 - 0.1, 9, between(60, 110), 8);
+    },
+    m: (a, b) => {
+      const m = (a + b) / 2;
+      stroke(a, y0, b, y0 + tv); stroke(a, y0 + tv, a + tu, y1);
+      stroke(m - tu / 2, y0 + tv, m + tu / 2, y1); stroke(b - tu, y0 + tv, b, y1);
+    },
+  };
+  // Picture 29 is cell 2, 30 is 3, 31 is 4: "sw" left of the middle, "im" right of it.
+  small.s(2.55, 2.85); small.w(3.0, 3.42); small.i(3.75, 3.85); small.m(4.0, 4.45);
+}
+
 // ---------------------------------------------------------------- green
 // The long bar through the bottom of the letters, and thinner green lines across the wall.
 box('green', COLS / 2, 3.85, W * 1.1, 17, 190, 14, 6.5);
 box('green', COLS / 2 + 0.3, 1.25, W * 1.05, 5, 250, 5, -4.5);
 box('green', 1.6, 2.6, UW * 3.4, 6, 235, 5, 11);
 box('green', 5.4, 0.15, UW * 3.0, 4, 270, 4, -9);
-box('green', 3.5, 4.5, UW * 3.2, 7, 220, 5, 3);
+box('green', 3.5, 4.9, UW * 3.2, 7, 220, 5, 3);
 
 // ---------------------------------------------------------------- each picture's own composition
 const SUNS = new Set([1, 3, 6, 9, 12, 14, 17, 20, 23, 25, 28, 30, 31]); // pictures with a sun

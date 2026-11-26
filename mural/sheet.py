@@ -1,5 +1,5 @@
 """Finishes the 31 pictures from mural.mjs: scales the renders in out/raw/ down to their size
-into out/tiles/ (PNG and high-quality JPEG), then puts them back together as out/wall.jpg (the
+into out/tiles/ as 1.png .. 31.png and 1.jpg .. 31.jpg, then puts them back together as out/wall.jpg (the
 whole wall, no gaps) and out/mockup.png (a gallery, with gaps, the last three centred).
 
     python3 mural/sheet.py [width of one picture in the previews, default 480]   (needs Pillow)
@@ -18,11 +18,11 @@ for n in range(len(cells)):
         im = Image.open(raw).convert('RGB')
         if im.size != size:
             im = im.resize(size, Image.LANCZOS)
-        im.save(os.path.join(out, 'tiles', f'{n + 1:02d}.png'), optimize=True)
-        im.save(os.path.join(out, 'tiles', f'{n + 1:02d}.jpg'), quality=95, subsampling=0)
+        im.save(os.path.join(out, 'tiles', f'{n + 1}.png'))
+        im.save(os.path.join(out, 'tiles', f'{n + 1}.jpg'), quality=95, subsampling=0)
 w = int(sys.argv[1]) if len(sys.argv) > 1 else 480
 h = round(w * 9 / 16)
-tiles = [Image.open(os.path.join(out, 'tiles', f'{n + 1:02d}.png')).convert('RGB').resize((w, h), Image.LANCZOS) for n in range(len(cells))]
+tiles = [Image.open(os.path.join(out, 'tiles', f'{n + 1}.png')).convert('RGB').resize((w, h), Image.LANCZOS) for n in range(len(cells))]
 
 # The wall without gaps.
 wall = Image.new('RGB', (7 * w, 5 * h), (245, 245, 241))
