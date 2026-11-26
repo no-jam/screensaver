@@ -72,12 +72,10 @@ they go 3D, on purpose.
 
 ## Releasing
 
-Tag a version and push the tag; the "Release" workflow builds `Nojam.saver.zip` on a Mac and
-publishes it on the Releases page:
-
-```sh
-git tag v1.0.0 && git push origin v1.0.0
-```
+Either push a version tag (`git tag v1.0.0 && git push origin v1.0.0`), or on GitHub choose
+Releases, Draft a new release, type a new tag such as `v1.0.0` on `main`, and publish. Either
+way the "Release" workflow builds `Nojam.saver.zip` on a Mac and attaches it to the release
+within a few minutes.
 
 Keep `CFBundleShortVersionString` in `macos/Info.plist` in step with the tag.
 
