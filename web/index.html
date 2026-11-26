@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nojam screensaver</title>
+<!--
+  The Nojam screensaver. Suprematist compositions in the brand's vocabulary (planes, one long
+  green bar, an ochre sun, thin rules, small accents), lifted into 3D: every shape is a slab
+  floating at its own height over the ground, with soft contact-hardening shadows, a slowly
+  moving camera for parallax, and a new composition every few seconds.
+
+  Two motions: "drift" (each shape glides slowly into the next picture, so it simply changes)
+  and "shuffle" (the shapes lift, spin and land in a new picture in a wave across the screen).
+
+  The macOS screensaver (../macos) loads this page in a WKWebView and sets window.NOJAM before
+  it runs. Opened in a browser it reads the same settings from the query string, for example
+  index.html?mode=shuffle&theme=night&pace=1.2, and shows a small control bar.
+  Plain WebGL 2, no dependencies, renders at the display's full pixel density, in Display P3
+  where the display supports it.
+-->
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; width: 100vw; height: 100vh; opacity: 0; transition: opacity 2.2s ease; }
+  canvas.on { opacity: 1; }
+  #bar { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: none; gap: 6px; padding: 6px;
+    border-radius: 999px; background: rgba(20, 27, 36, .72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    font: 500 13px/1 -apple-system, "Onest", system-ui, sans-serif; transition: opacity .6s ease; }
+  #bar.show { display: flex; }
+  #bar.idle { opacity: 0; }
+  #bar button { appearance: none; border: 0; border-radius: 999px; padding: 8px 14px; color: #E3E8EE; background: transparent; cursor: pointer; font: inherit; }
+  #bar button[aria-pressed="true"] { background: #52C795; color: #0E1620; }
+  #bar .sep { width: 1px; margin: 4px 4px; background: rgba(227, 232, 238, .25); }
+  #msg { position: fixed; inset: 0; display: none; place-items: center; color: #A4AEBB; font: 15px -apple-system, system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<div id="bar" role="toolbar" aria-label="Screensaver settings">
+  <button data-k="mode" data-v="drift">Drift</button>
+  <button data-k="mode" data-v="shuffle">Shuffle</button>
+  <span class="sep"></span>
+  <button data-k="theme" data-v="auto">Auto</button>
+  <button data-k="theme" data-v="day">Day</button>
+  <button data-k="theme" data-v="night">Night</button>
+  <span class="sep"></span>
+  <button data-k="next">Next picture</button>
+</div>
+<div id="msg">This screensaver needs WebGL 2.</div>
+<script>
+'use strict';
+(() => {
+  // ---------------------------------------------------------------- settings
+  const q = new URLSearchParams(location.search);
+  const given = window.NOJAM || {};
+  const cfg = {
+    mode: given.mode || q.get('mode') || 'drift', // drift | shuffle
+    theme: given.theme || q.get('theme') || 'auto', // auto | day | night
+    system: given.system || null, // light | dark, from the saver when theme is auto
+    pace: Math.min(3, Math.max(0.25, +(given.pace || q.get('pace') || 1))),
+    saver: !!given.saver,
+    preview: !!given.preview,
+    quality: +(given.quality || q.get('quality') || 1), // multiplies the pixel ratio
+    seed: given.seed || q.get('seed') || String(Date.now() ^ (Math.random() * 1e9)),
+    still: q.get('still') != null, // for thumbnails: render a settled picture, no intro
+  };
+
+  // ---------------------------------------------------------------- random (as lib/art.mjs)
+  function seedOf(name) {
+    let h = 0x811c9dc5;
+    for (const ch of String(name)) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h;
+  }
+  function rng(name) {
+    let a = seedOf(name);
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // ---------------------------------------------------------------- palettes
+  // Display P3 values: the brand colours, pushed to their vivid ends. On an sRGB display they
+  // are converted (and gently clipped) in the shader.
+  const PALETTES = {
+    day: {
+      ground: '#E6EEE8', backdrop: '#D6E3DA', blue: '#2C63DC', sky: '#6F9BEA', ink: '#1E3049',
+      inkSoft: '#4D6079', ochre: '#F6A91E', green: '#0BAE6C', paper: '#F7F6EF',
+      ambTop: [0.62, 0.635, 0.65], ambBot: [0.50, 0.52, 0.53], light: [0.42, 0.405, 0.385], vignette: 0.2, spec: 0.22,
+    },
+    night: {
+      ground: '#111923', backdrop: '#18232F', blue: '#4C84FA', sky: '#86AAF2', ink: '#C4D1E3',
+      inkSoft: '#8595AB', ochre: '#FFB52E', green: '#2BDB97', paper: '#E9ECE6',
+      ambTop: [0.50, 0.53, 0.60], ambBot: [0.36, 0.38, 0.44], light: [0.58, 0.56, 0.53], vignette: 0.42, spec: 0.12,
+    },
+  };
+  const hexLin = (h) => [1, 3, 5].map((i) => {
+    const c = parseInt(h.slice(i, i + 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  const COLOR_KEYS = ['ground', 'backdrop', 'blue', 'sky', 'ink', 'inkSoft', 'ochre', 'green', 'paper'];
+  function linPalette(p) {
+    const o = {};
+    for (const k of COLOR_KEYS) o[k] = hexLin(p[k]);
+    o.ambTop = p.ambTop.slice(); o.ambBot = p.ambBot.slice(); o.light = p.light.slice();
+    o.vignette = p.vignette; o.spec = p.spec;
+    return o;
+  }
+  const LIN = { day: linPalette(PALETTES.day), night: linPalette(PALETTES.night) };
+  const media = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
+  function themeName() {
+    if (cfg.theme === 'day' || cfg.theme === 'night') return cfg.theme;
+    if (cfg.system) return cfg.system === 'dark' ? 'night' : 'day';
+    return media && media.matches ? 'night' : 'day';
+  }
+  // The palette in use eases towards the theme's, so a theme change crossfades.
+  const pal = linPalette(PALETTES[themeName()]);
+  function easePalette(k) {
+    const to = LIN[themeName()];
+    for (const key of [...COLOR_KEYS, 'ambTop', 'ambBot', 'light']) for (let i = 0; i < 3; i++) pal[key][i] += (to[key][i] - pal[key][i]) * k;
+    pal.vignette += (to.vignette - pal.vignette) * k;
+    pal.spec += (to.spec - pal.spec) * k;
+  }
+
+  // ---------------------------------------------------------------- composition
+  // One composition is a fixed list of slots, always in the same order and of the same type, so
+  // that any picture can turn into any other: slot 1 is always the main plane, slot 4 always the
+  // green bar, and so on. A slot a picture does not use is hidden (size 0).
+  const SLOTS = [
+    'box', // 0 backdrop plane, low and pale
+    'box', // 1 main plane
+    'box', // 2 second plane, overlapping its edge
+    'disc', // 3 the sun
+    'box', // 4 the long green bar
+    'box', 'box', 'box', // 5-7 thin rules parallel to the bar
+    'box', // 8 thin upright rule
+    'box', 'box', // 9-10 small accents
+    'box', 'box', 'disc', 'box', // 11-14 a satellite group: plane, square, dot, crossing bar
+    'box', 'box', 'box', 'box', 'box', 'box', // 15-20 floating accents, high up
+    'disc', // 21 a small high dot
+    'box', // 22 a long thin rule across the satellite side
+    'box', // 23 a paper-white plane, sometimes
+  ];
+
+  function compose(rand, W, H) {
+    const pick = (list) => list[Math.floor(rand() * list.length)];
+    const between = (a, b) => a + rand() * (b - a);
+    const sign = rand() < 0.5 ? -1 : 1;
+    const tilt = sign * between(6, 17);
+    const s = Math.min(W, H);
+    const out = [];
+    // x, y: centre, in a y-down canvas of W x H; z: height of the slab's centre; d: thickness.
+    // tx, ty: a small tilt out of the ground plane, in degrees.
+    const box = (col, x, y, w, h, deg, z, d, tx = 0, ty = 0) => out.push({ col, x: x + w / 2, y: y + h / 2, w, h, deg, z: z + d / 2, d, tx, ty });
+    const disc = (col, cx, cy, r, z, d) => out.push({ col, x: cx, y: cy, w: 2 * r, h: 2 * r, deg: 0, z: z + d / 2, d, tx: 0, ty: 0 });
+    const hide = () => out.push(null);
+    const wob = () => between(-4, 4);
+
+    const left = rand() < 0.5;
+    const px0 = W * 0.5; // composition centre
+
+    // 0 backdrop
+    {
+      const bw = between(0.32, 0.5) * W, bh = between(0.75, 1.15) * H;
+      const bx = left ? between(-0.06, 0.12) * W : W - bw - between(-0.06, 0.12) * W;
+      box('backdrop', bx, between(-0.15, 0.05) * H, bw, bh, tilt * between(0.15, 0.45), 0.5, 3);
+    }
+    // 1 main plane
+    const pw = between(0.36, 0.52) * s, ph = pw * between(0.9, 1.45);
+    const px = left ? between(0.1, 0.24) * W : W - pw - between(0.1, 0.24) * W;
+    const py = between(0.1, 0.28) * H;
+    box(pick(['blue', 'ink', 'blue']), px, py, pw, ph, tilt * between(0.3, 0.9), between(16, 40), between(10, 16), wob(), wob());
+    // 2 second plane
+    const qw = pw * between(0.32, 0.55);
+    box(pick(['ink', 'blue', 'ochre', 'sky']), px + (left ? pw * 0.7 : -qw * 0.6), py + ph * between(0.45, 0.8), qw, qw * between(0.45, 0.8), tilt * between(0.6, 1.4), between(70, 120), between(8, 12), wob(), wob());
+    // 3 sun
+    const sunX = left ? W - between(0.14, 0.32) * W : between(0.14, 0.32) * W;
+    disc('ochre', sunX, between(0.16, 0.32) * H, between(0.07, 0.12) * s, between(30, 150), between(10, 16));
+    // 4 green bar
+    const by = between(0.58, 0.78) * H;
+    const bh = between(0.035, 0.055) * s;
+    box('green', -0.2 * W, by, 1.4 * W, bh, tilt, between(130, 175), 14, 0, 0);
+    // 5-7 rules
+    const rules = 2 + Math.floor(rand() * 2);
+    for (let i = 0; i < 3; i++) {
+      if (i >= rules) { hide(); continue; }
+      const lw = between(0.18, 0.42) * W;
+      box(i ? 'inkSoft' : 'ink', between(0.05, 0.9) * W - lw / 2, by + (i % 2 ? -1 : 1) * between(0.08, 0.2) * H, lw, between(3, 6), tilt, between(60, 220), 4);
+    }
+    // 8 upright rule
+    box('inkSoft', between(0.3, 0.7) * W, between(0.04, 0.3) * H, between(3, 5), between(0.15, 0.32) * H, tilt, between(40, 110), 4);
+    // 9-10 small accents
+    const a = between(0.03, 0.05) * s;
+    box(pick(['ochre', 'blue', 'ink']), between(0.05, 0.95) * W, between(0.78, 0.92) * H, a, a, between(-30, 30), between(180, 260), 8, wob(), wob());
+    box(pick(['ochre', 'blue', 'ink']), between(0.35, 0.65) * W, between(0.05, 0.2) * H, a * 2.2, a * 0.7, tilt, between(200, 280), 8);
+
+    // 11-14 satellite group, on the other side from the main plane, under the sun
+    if (rand() < 0.85) {
+      const gx = left ? between(0.58, 0.8) * W : between(0.2, 0.42) * W;
+      const gy = between(0.42, 0.62) * H;
+      const gw = between(0.13, 0.22) * s, gh = gw * between(0.6, 1.3);
+      box(pick(['blue', 'ink', 'sky']), gx - gw / 2, gy - gh / 2, gw, gh, -tilt * between(0.4, 1.1), between(25, 60), 10, wob(), wob());
+      const sq = gw * between(0.3, 0.45);
+      box(pick(['ochre', 'ink', 'blue']), gx + gw * between(0.1, 0.4), gy - gh * between(0.5, 0.8), sq, sq, -tilt * between(0.5, 2), between(90, 140), 8, wob(), wob());
+      disc(pick(['blue', 'ink', 'ochre']), gx - gw * between(0.4, 0.8), gy + gh * between(0.4, 0.7), between(0.02, 0.04) * s, between(110, 170), 8);
+      const cw = between(0.2, 0.34) * W;
+      box('ink', gx - cw / 2, gy + between(-0.05, 0.08) * H, cw, between(6, 11), -tilt * between(1.5, 3.5), between(150, 210), 6);
+    } else { hide(); hide(); hide(); hide(); }
+
+    // 15-20 floating accents
+    const n = 2 + Math.floor(rand() * 5);
+    for (let i = 0; i < 6; i++) {
+      if (i >= n) { hide(); continue; }
+      const k = between(0.012, 0.03) * s;
+      const long = rand() < 0.4;
+      box(pick(['ochre', 'blue', 'ink', 'sky', 'inkSoft']), between(0.04, 0.96) * W, between(0.04, 0.96) * H, long ? k * between(2.5, 5) : k, long ? k * 0.45 : k,
+        long ? tilt + between(-8, 8) : between(-40, 40), between(240, 380), 6, wob() * 2, wob() * 2);
+    }
+    // 21 small high dot
+    if (rand() < 0.7) disc(pick(['ochre', 'blue', 'ink']), between(0.1, 0.9) * W, between(0.1, 0.9) * H, between(0.008, 0.016) * s, between(260, 360), 6);
+    else hide();
+    // 22 long thin rule
+    if (rand() < 0.6) {
+      const lw = between(0.5, 0.9) * W;
+      box('inkSoft', px0 - lw / 2 + between(-0.15, 0.15) * W, between(0.1, 0.9) * H, lw, between(2.5, 4), tilt + 90 * (rand() < 0.3 ? 1 : 0), between(240, 320), 3);
+    } else hide();
+    // 23 paper plane
+    if (rand() < 0.45) {
+      const ww = between(0.08, 0.16) * s;
+      box('paper', between(0.15, 0.85) * W, between(0.15, 0.85) * H, ww, ww * between(1, 1.8), tilt * between(-1, 1), between(55, 95), 7, wob(), wob());
+    } else hide();
+
+    // Centre on the origin, y up (the 3D world), SVG's clockwise degrees become anticlockwise.
+    return out.map((o) => (o ? { ...o, x: o.x - W / 2, y: H / 2 - o.y, deg: -o.deg } : null));
+  }
+
+  // ---------------------------------------------------------------- math
+  const V = {
+    sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+    cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+    dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+    norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+  };
+  const M4 = {
+    persp(fovy, asp, n, f) {
+      const t = 1 / Math.tan(fovy / 2), nf = 1 / (n - f);
+      return new Float32Array([t / asp, 0, 0, 0, 0, t, 0, 0, 0, 0, (f + n) * nf, -1, 0, 0, 2 * f * n * nf, 0]);
+    },
+    ortho(l, r, b, t, n, f) {
+      return new Float32Array([2 / (r - l), 0, 0, 0, 0, 2 / (t - b), 0, 0, 0, 0, -2 / (f - n), 0, -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1]);
+    },
+    lookAt(e, c, u) {
+      const z = V.norm(V.sub(e, c)), x = V.norm(V.cross(u, z)), y = V.cross(z, x);
+      return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -V.dot(x, e), -V.dot(y, e), -V.dot(z, e), 1]);
+    },
+    mul(a, b) {
+      const o = new Float32Array(16);
+      for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) {
+        let s = 0;
+        for (let k = 0; k < 4; k++) s += a[i + k * 4] * b[k + j * 4];
+        o[i + j * 4] = s;
+      }
+      return o;
+    },
+  };
+  const D2R = Math.PI / 180;
+  // Rotation R = Rz * Rx * Ry as columns; model = T * R * S; normals = R * S^-1.
+  const model = new Float32Array(16), nmat = new Float32Array(9);
+  function setModel(x, y, z, sx, sy, sz, rz, rx, ry) {
+    const cz = Math.cos(rz), sz_ = Math.sin(rz), cx = Math.cos(rx), sx_ = Math.sin(rx), cy = Math.cos(ry), sy_ = Math.sin(ry);
+    // Rz*Rx
+    const a = [cz, sz_, 0, -sz_ * cx, cz * cx, sx_, sz_ * sx_, -cz * sx_, cx]; // columns
+    // (Rz*Rx)*Ry: Ry columns [cy,0,-sy],[0,1,0],[sy,0,cy]
+    const c0 = [a[0] * cy - a[6] * sy_, a[1] * cy - a[7] * sy_, a[2] * cy - a[8] * sy_];
+    const c1 = [a[3], a[4], a[5]];
+    const c2 = [a[0] * sy_ + a[6] * cy, a[1] * sy_ + a[7] * cy, a[2] * sy_ + a[8] * cy];
+    model.set([c0[0] * sx, c0[1] * sx, c0[2] * sx, 0, c1[0] * sy, c1[1] * sy, c1[2] * sy, 0, c2[0] * sz, c2[1] * sz, c2[2] * sz, 0, x, y, z, 1]);
+    nmat.set([c0[0] / sx, c0[1] / sx, c0[2] / sx, c1[0] / sy, c1[1] / sy, c1[2] / sy, c2[0] / sz, c2[1] / sz, c2[2] / sz]);
+  }
+
+  // ---------------------------------------------------------------- GL
+  const canvas = document.getElementById('c');
+  const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, depth: true, powerPreference: 'high-performance', preserveDrawingBuffer: cfg.still });
+  if (!gl) { document.getElementById('msg').style.display = 'grid'; return; }
+  let p3 = false;
+  if ('drawingBufferColorSpace' in gl && window.matchMedia && matchMedia('(color-gamut: p3)').matches) {
+    try { gl.drawingBufferColorSpace = 'display-p3'; p3 = gl.drawingBufferColorSpace === 'display-p3'; } catch (e) { p3 = false; }
+  }
+  // Linear Display P3 to linear sRGB, column-major.
+  const P3_TO_SRGB = new Float32Array([1.2249, -0.0420, -0.0197, -0.2247, 1.0419, -0.0786, 0, 0, 1.0979]);
+  const IDENT3 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+
+  const VS = `#version 300 es
+  layout(location=0) in vec3 aPos; layout(location=1) in vec3 aNor;
+  uniform mat4 uModel, uVP, uLVP; uniform mat3 uNM;
+  out vec3 vN; out vec3 vW; out vec4 vL;
+  void main(){ vec4 w = uModel*vec4(aPos,1.); vW = w.xyz; vN = uNM*aNor; vL = uLVP*w; gl_Position = uVP*w; }`;
+  const FS = `#version 300 es
+  precision highp float; precision highp sampler2DShadow;
+  in vec3 vN; in vec3 vW; in vec4 vL;
+  uniform vec3 uColor, uL, uCam, uAmbTop, uAmbBot, uLightCol;
+  uniform float uSpec, uPenK, uSearch, uMinPen, uMaxPen, uBias, uVig, uSat;
+  uniform vec2 uRes; uniform mat3 uOut;
+  uniform sampler2DShadow uSh; uniform highp sampler2D uShRaw;
+  out vec4 o;
+  float ign(vec2 p){ return fract(52.9829189*fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+  vec2 vogel(int i, float n, float phi){ float r = sqrt((float(i)+.5)/n); float t = float(i)*2.39996323+phi; return r*vec2(cos(t), sin(t)); }
+  float shadow(vec3 p, float phi){
+    if(p.x<=0.||p.x>=1.||p.y<=0.||p.y>=1.||p.z>=1.) return 1.;
+    float zr = p.z - uBias, sum = 0., cnt = 0.;
+    for(int i=0;i<16;i++){ float d = texture(uShRaw, p.xy + vogel(i,16.,phi)*uSearch).r; if(d<zr){ sum += d; cnt += 1.; } }
+    if(cnt<.5) return 1.;
+    float pen = clamp((zr - sum/cnt)*uPenK, uMinPen, uMaxPen);
+    float s = 0.;
+    for(int i=0;i<32;i++) s += texture(uSh, vec3(p.xy + vogel(i,32.,phi+1.7)*pen, zr));
+    return s/32.;
+  }
+  vec3 toSRGB(vec3 c){ c = clamp(c, 0., 1.); return mix(c*12.92, 1.055*pow(c, vec3(1./2.4)) - .055, step(.0031308, c)); }
+  void main(){
+    vec3 n = normalize(vN); if(!gl_FrontFacing) n = -n;
+    float phi = ign(gl_FragCoord.xy)*6.2831853;
+    float sh = shadow(vL.xyz/vL.w*.5+.5, phi);
+    float ndl = max(dot(n, uL), 0.);
+    vec3 amb = mix(uAmbBot, uAmbTop, n.z*.5+.5)*mix(.84, 1., sh);
+    vec3 c = uColor*(amb + uLightCol*ndl*sh);
+    vec3 v = normalize(uCam - vW), h = normalize(v + uL);
+    c += uSpec*pow(max(dot(n,h),0.), 70.)*sh*uLightCol;
+    // a soft edge light on the sides of the slabs, so their thickness reads
+    c += uColor*.18*pow(1.-max(dot(n,v),0.), 3.)*(1.-abs(n.z));
+    c = uOut*c;
+    // keep the vivid colours vivid after clipping to sRGB
+    float l = dot(c, vec3(.2126,.7152,.0722)); c = mix(vec3(l), c, uSat);
+    vec2 q = gl_FragCoord.xy/uRes - .5; q.x *= uRes.x/uRes.y*.75;
+    c *= 1. - uVig*pow(clamp(length(q)*1.35, 0., 1.), 2.4);
+    c = toSRGB(c) + (ign(gl_FragCoord.yx + 17.) - .5)/255.;
+    o = vec4(c, 1.);
+  }`;
+  const VS_DEPTH = `#version 300 es
+  layout(location=0) in vec3 aPos; uniform mat4 uModel, uLVP;
+  void main(){ gl_Position = uLVP*uModel*vec4(aPos,1.); }`;
+  const FS_DEPTH = `#version 300 es
+  precision mediump float; void main(){}`;
+
+  function program(vs, fs) {
+    const p = gl.createProgram();
+    for (const [type, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      gl.attachShader(p, s);
+    }
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) { const name = gl.getActiveUniform(p, i).name; u[name] = gl.getUniformLocation(p, name); }
+    return { p, u };
+  }
+  const prog = program(VS, FS), depthProg = program(VS_DEPTH, FS_DEPTH);
+
+  function mesh(pos, nor, idx) {
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    for (const [loc, data] of [[0, pos], [1, nor]]) {
+      const b = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+    }
+    const ib = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(idx), gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    return { vao, count: idx.length };
+  }
+  function boxMesh() {
+    const pos = [], nor = [], idx = [];
+    const faces = [[[1, 0, 0], [0, 1, 0], [0, 0, 1]], [[-1, 0, 0], [0, 0, 1], [0, 1, 0]], [[0, 1, 0], [0, 0, 1], [1, 0, 0]],
+      [[0, -1, 0], [1, 0, 0], [0, 0, 1]], [[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [0, 1, 0], [1, 0, 0]]];
+    for (const [n, u, v] of faces) {
+      const base = pos.length / 3;
+      for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        for (let i = 0; i < 3; i++) pos.push(0.5 * n[i] + 0.5 * a * u[i] + 0.5 * b * v[i]);
+        nor.push(...n);
+      }
+      idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    return mesh(pos, nor, idx);
+  }
+  function discMesh(seg = 192) {
+    const pos = [], nor = [], idx = [];
+    for (let i = 0; i <= seg; i++) { // side
+      const t = (i / seg) * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
+      pos.push(0.5 * c, 0.5 * s, -0.5, 0.5 * c, 0.5 * s, 0.5); nor.push(c, s, 0, c, s, 0);
+      if (i < seg) { const b = i * 2; idx.push(b, b + 2, b + 1, b + 1, b + 2, b + 3); }
+    }
+    for (const z of [0.5, -0.5]) { // caps
+      const base = pos.length / 3;
+      pos.push(0, 0, z); nor.push(0, 0, Math.sign(z));
+      for (let i = 0; i <= seg; i++) { const t = (i / seg) * Math.PI * 2; pos.push(0.5 * Math.cos(t), 0.5 * Math.sin(t), z); nor.push(0, 0, Math.sign(z)); }
+      for (let i = 0; i < seg; i++) z > 0 ? idx.push(base, base + 1 + i, base + 2 + i) : idx.push(base, base + 2 + i, base + 1 + i);
+    }
+    return mesh(pos, nor, idx);
+  }
+  const G = 40000;
+  const MESH = { box: boxMesh(), disc: discMesh(), ground: mesh([-G, -G, 0, G, -G, 0, G, G, 0, -G, G, 0], [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1], [0, 1, 2, 0, 2, 3]) };
+
+  // Shadow map: one depth texture, read two ways (compared for soft PCF, raw for the blocker search).
+  const SHADOW = Math.min(4096, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+  const shadowTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, shadowTex);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.DEPTH_COMPONENT24, SHADOW, SHADOW);
+  const shadowFbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, shadowTex, 0);
+  gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const sCmp = gl.createSampler(), sRaw = gl.createSampler();
+  for (const [s, f] of [[sCmp, gl.LINEAR], [sRaw, gl.NEAREST]]) {
+    gl.samplerParameteri(s, gl.TEXTURE_MIN_FILTER, f); gl.samplerParameteri(s, gl.TEXTURE_MAG_FILTER, f);
+    gl.samplerParameteri(s, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.samplerParameteri(s, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+  gl.samplerParameteri(sCmp, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+  gl.samplerParameteri(sCmp, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+
+  // ---------------------------------------------------------------- scene state
+  const H = 1000; // the composition is H tall; its width follows the screen
+  let W = H * 1.6;
+  let seq = 0;
+  const nextRand = () => rng(`${cfg.seed}:${seq++}`);
+  const ZERO = (o) => ({ ...o, w: 0, h: 0 });
+  const slots = SLOTS.map((type) => ({ type, cur: null, tw: null, col: 'ink', colFrom: 'ink', ph: Math.random() * 100 }));
+
+  const ease = {
+    inOut: (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2),
+    inOutQuint: (p) => (p < 0.5 ? 16 * p ** 5 : 1 - Math.pow(-2 * p + 2, 5) / 2),
+    outBack: (p) => { const c1 = 1.4, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); },
+  };
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+
+  let time = 0, nextAt = 0, burst = { t0: -99, span: 1 };
+
+  // Start a move to a new composition. kind: intro | drift | shuffle.
+  function newPicture(kind) {
+    const rand = nextRand();
+    const target = compose(rand, W, H);
+    const r = Math.random;
+    const ox = (r() - 0.5) * W, oy = (r() - 0.5) * H; // the shuffle wave starts here
+    const far = Math.hypot(W, H);
+    let span = 0;
+    slots.forEach((sl, i) => {
+      const t = target[i];
+      const cur = sl.cur;
+      let from, to;
+      if (!cur) { from = t ? ZERO(t) : null; to = t; }
+      else if (t) { from = cur.w < 0.5 ? { ...ZERO(t), z: t.z } : { ...cur }; to = { ...t }; }
+      else { from = { ...cur }; to = ZERO(cur); }
+      if (!from || !to) { sl.tw = null; sl.cur = null; return; }
+      // A box looks the same turned half a turn: take the nearer way round.
+      if (sl.type === 'box') { while (to.deg - from.deg > 90) to.deg -= 180; while (to.deg - from.deg < -90) to.deg += 180; }
+      // cw: the part of the move in which the colour changes, short so it never looks muddy.
+      const tw = { from, to, t0: time, lift: 0, spin: 0, flip: 0, roll: 0, cw: kind === 'shuffle' ? [0.42, 0.58] : [0.35, 0.65] };
+      if (kind === 'intro') {
+        tw.delay = cfg.still ? 0 : 0.2 + r() * 2.2; tw.dur = cfg.still ? 0.001 : 2.8 + r() * 1.6; tw.ease = ease.inOut;
+        from.z = 0; from.deg = to.deg - 25 * (r() - 0.5);
+      } else if (kind === 'drift') {
+        tw.delay = r() * 4; tw.dur = 8 + r() * 3; tw.ease = ease.inOut;
+        tw.lift = 20 + r() * 50;
+      } else {
+        const d = Math.hypot(from.x - ox, from.y - oy) / far;
+        tw.delay = d * 1.1 + r() * 0.15; tw.dur = 1.6 + r() * 0.7; tw.ease = ease.inOutQuint;
+        tw.lift = 140 + r() * 320;
+        if (sl.type === 'box') tw.spin = (r() < 0.5 ? -1 : 1) * 180 * (1 + Math.floor(r() * 2));
+        tw.flip = r() < 0.5 ? 180 * (r() < 0.5 ? -1 : 1) : 0;
+        tw.roll = r() < 0.3 ? 180 : 0;
+        to.deg += tw.spin;
+      }
+      span = Math.max(span, tw.delay + tw.dur);
+      sl.colFrom = sl.tw ? sl.col : (t ? t.col : sl.col);
+      sl.col = t ? t.col : sl.col;
+      sl.tw = tw;
+      if (!sl.cur) sl.cur = { ...from };
+    });
+    if (kind === 'shuffle') burst = { t0: time, span };
+  }
+
+  function step(sl) {
+    const tw = sl.tw;
+    if (!tw) return 0;
+    const p = clamp01((time - tw.t0 - tw.delay) / tw.dur);
+    const e = tw.ease(p), a = tw.from, b = tw.to, c = sl.cur;
+    for (const k of ['x', 'y', 'z', 'w', 'h', 'd', 'deg', 'tx', 'ty']) c[k] = lerp(a[k], b[k], e);
+    c.col = b.col || a.col;
+    const arc = Math.sin(Math.PI * e);
+    c.zLift = arc * tw.lift;
+    c.flip = tw.flip * e; c.roll = tw.roll * e;
+    if (p >= 1) { c.flip = 0; c.roll = 0; c.zLift = 0; }
+    return e;
+  }
+
+  // ---------------------------------------------------------------- frame
+  let dpr = 1, vw = 1, vh = 1;
+  function resize() {
+    const ratio = Math.min(3, (window.devicePixelRatio || 1) * cfg.quality);
+    // Very large screens: keep below ~16 MP so 60 fps holds on any recent Mac.
+    const css = [window.innerWidth || 800, window.innerHeight || 500];
+    dpr = Math.min(ratio, Math.sqrt(16.5e6 / (css[0] * css[1])));
+    vw = Math.round(css[0] * dpr); vh = Math.round(css[1] * dpr);
+    if (canvas.width !== vw || canvas.height !== vh) { canvas.width = vw; canvas.height = vh; }
+    W = H * Math.max(1, css[0] / css[1]);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  const mouse = { x: 0, y: 0, tx: 0, ty: 0 };
+  let camPhase = Math.random() * 100, camAmp = 1;
+  const FOV = 30 * D2R;
+
+  function render(dt) {
+    easePalette(1 - Math.exp(-dt * 2.5));
+    const env = clamp01((time - burst.t0) / burst.span);
+    const swing = time - burst.t0 < burst.span ? Math.sin(Math.PI * env) : 0;
+
+    // Camera: a slow Lissajous drift over the picture gives the parallax; a shuffle swings it.
+    const shuffle = cfg.mode === 'shuffle';
+    camAmp += ((shuffle ? 1.35 : 1) - camAmp) * (1 - Math.exp(-dt));
+    camPhase += dt * cfg.pace * (0.045 + (shuffle ? 0.03 + 0.22 * swing : 0));
+    mouse.x += (mouse.tx - mouse.x) * (1 - Math.exp(-dt * 3)); mouse.y += (mouse.ty - mouse.y) * (1 - Math.exp(-dt * 3));
+    const aspect = vw / vh;
+    const D = (H * 0.56) / Math.tan(FOV / 2) * Math.max(1, 1.6 / aspect) * (1 + 0.04 * Math.sin(camPhase * 0.41) + 0.08 * swing);
+    const ax = 0.17 * H * camAmp, ay = 0.12 * H * camAmp;
+    const eye = [ax * Math.sin(camPhase) + mouse.x * 260, ay * Math.sin(camPhase * 0.73 + 1.3) + mouse.y * 180, D];
+    const look = [0.25 * ax * Math.sin(camPhase * 0.6 + 2), 0.25 * ay * Math.cos(camPhase * 0.5), 60];
+    const roll = 0.018 * Math.sin(camPhase * 0.33) + 0.03 * swing * Math.sin(burst.t0);
+    const view = M4.lookAt(eye, look, [Math.sin(roll), Math.cos(roll), 0]);
+    const vp = M4.mul(M4.persp(FOV, aspect, 200, 12000), view);
+
+    // Light from the upper left, turning a little over the minutes.
+    const la = 2.25 + 0.12 * Math.sin(time * 0.013), le = 0.98 + 0.06 * Math.sin(time * 0.009);
+    const L = V.norm([Math.cos(la) * Math.cos(le), Math.sin(la) * Math.cos(le), Math.sin(le) * 1.6]);
+    const R = 0.62 * Math.hypot(W, H) + 300;
+    const lEye = [L[0] * 4000, L[1] * 4000, L[2] * 4000];
+    const lvp = M4.mul(M4.ortho(-R, R, -R, R, 1500, 6500), M4.lookAt(lEye, [0, 0, 0], [0, 0, 1]));
+    const depthRange = 5000, worldPerUv = 2 * R, soft = 0.06;
+
+    // Shape transforms for this frame.
+    const draws = [];
+    for (const sl of slots) {
+      step(sl);
+      const c = sl.cur;
+      if (!c || c.w < 0.5 || c.h < 0.5) continue;
+      const bob = Math.sin(time * 0.35 + sl.ph) * (4 + c.z * 0.02);
+      const tx = (c.tx + Math.sin(time * 0.27 + sl.ph * 1.3) * 1.2 + (c.flip || 0)) * D2R;
+      const ty = (c.ty + Math.cos(time * 0.23 + sl.ph) * 1.2 + (c.roll || 0)) * D2R;
+      // A tilted slab dips at one corner: keep that corner above the ground.
+      const dip = 0.5 * (Math.abs(Math.sin(tx)) * c.h + Math.abs(Math.sin(ty)) * c.w) + c.d / 2 + 1;
+      const z = Math.max(dip, c.z + (c.zLift || 0) + bob);
+      setModel(c.x, c.y, z, c.w, c.h, c.d, c.deg * D2R, tx, ty);
+      const e = sl.tw ? clamp01((time - sl.tw.t0 - sl.tw.delay) / sl.tw.dur) : 1;
+      const ca = pal[sl.colFrom] || pal.ink, cb = pal[c.col] || pal.ink;
+      const cw = sl.tw ? sl.tw.cw : [0, 1];
+      const ce = ease.inOut(clamp01((e - cw[0]) / (cw[1] - cw[0])));
+      draws.push({ mesh: MESH[sl.type], m: model.slice(), n: nmat.slice(), col: [lerp(ca[0], cb[0], ce), lerp(ca[1], cb[1], ce), lerp(ca[2], cb[2], ce)] });
+    }
+
+    // Shadow pass.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFbo);
+    gl.viewport(0, 0, SHADOW, SHADOW);
+    gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.cullFace(gl.FRONT);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(depthProg.p);
+    gl.uniformMatrix4fv(depthProg.u.uLVP, false, lvp);
+    for (const d of draws) {
+      gl.uniformMatrix4fv(depthProg.u.uModel, false, d.m);
+      gl.bindVertexArray(d.mesh.vao);
+      gl.drawElements(gl.TRIANGLES, d.mesh.count, gl.UNSIGNED_SHORT, 0);
+    }
+
+    // Main pass.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, vw, vh);
+    gl.cullFace(gl.BACK);
+    const g = pal.ground;
+    gl.clearColor(g[0], g[1], g[2], 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    const u = prog.u;
+    gl.useProgram(prog.p);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, shadowTex); gl.bindSampler(1, sCmp);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, shadowTex); gl.bindSampler(2, sRaw);
+    gl.uniform1i(u.uSh, 1); gl.uniform1i(u.uShRaw, 2);
+    gl.uniformMatrix4fv(u.uVP, false, vp);
+    gl.uniformMatrix4fv(u.uLVP, false, lvp);
+    gl.uniform3fv(u.uL, L);
+    gl.uniform3fv(u.uCam, eye);
+    gl.uniform3fv(u.uAmbTop, pal.ambTop); gl.uniform3fv(u.uAmbBot, pal.ambBot); gl.uniform3fv(u.uLightCol, pal.light);
+    gl.uniform1f(u.uPenK, (depthRange * soft) / worldPerUv);
+    gl.uniform1f(u.uSearch, 0.014); gl.uniform1f(u.uMinPen, 1.6 / SHADOW); gl.uniform1f(u.uMaxPen, 0.012);
+    gl.uniform1f(u.uBias, 0.00025);
+    gl.uniform1f(u.uVig, pal.vignette);
+    gl.uniform1f(u.uSat, p3 ? 1 : 1.06);
+    gl.uniform2f(u.uRes, vw, vh);
+    gl.uniformMatrix3fv(u.uOut, false, p3 ? IDENT3 : P3_TO_SRGB);
+
+    // The ground gets light so that, in the open, it shows exactly its own colour.
+    const gLit = pal.ambTop.map((a, i) => a * 1 + pal.light[i] * Math.max(0, L[2]));
+    gl.uniform3fv(u.uColor, g.map((c, i) => c / gLit[i]));
+    gl.uniform1f(u.uSpec, 0);
+    setModel(0, 0, 0, 1, 1, 1, 0, 0, 0);
+    gl.uniformMatrix4fv(u.uModel, false, model); gl.uniformMatrix3fv(u.uNM, false, nmat);
+    gl.bindVertexArray(MESH.ground.vao);
+    gl.drawElements(gl.TRIANGLES, MESH.ground.count, gl.UNSIGNED_SHORT, 0);
+
+    gl.uniform1f(u.uSpec, pal.spec);
+    for (const d of draws) {
+      gl.uniformMatrix4fv(u.uModel, false, d.m); gl.uniformMatrix3fv(u.uNM, false, d.n);
+      gl.uniform3fv(u.uColor, d.col);
+      gl.bindVertexArray(d.mesh.vao);
+      gl.drawElements(gl.TRIANGLES, d.mesh.count, gl.UNSIGNED_SHORT, 0);
+    }
+  }
+
+  // ---------------------------------------------------------------- loop
+  const HOLD = { drift: 15, shuffle: 6.5 };
+  let running = true, last = 0, raf = 0;
+  function frame(now) {
+    raf = 0;
+    if (!running) return;
+    const dt = last ? Math.min(0.1, (now - last) / 1000) : 1 / 60;
+    last = now;
+    time += dt * cfg.pace;
+    if (time >= nextAt) { newPicture(cfg.mode); nextAt = time + HOLD[cfg.mode]; }
+    render(dt);
+    raf = requestAnimationFrame(frame);
+  }
+  newPicture('intro');
+  nextAt = cfg.still ? Infinity : 6;
+  if (cfg.still) { time = 10; render(1); window.__ready = true; canvas.classList.add('on'); canvas.style.transition = 'none'; return; }
+  raf = requestAnimationFrame(frame);
+  requestAnimationFrame(() => canvas.classList.add('on'));
+
+  canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); running = false; });
+  canvas.addEventListener('webglcontextrestored', () => location.reload());
+
+  // The saver calls these on start, stop and settings changes.
+  window.nojam = {
+    pause() { running = false; last = 0; if (raf) cancelAnimationFrame(raf); raf = 0; },
+    resume() { if (!running) { running = true; raf = requestAnimationFrame(frame); } },
+    set(o) {
+      const modeChanged = o.mode && o.mode !== cfg.mode;
+      Object.assign(cfg, o);
+      if (modeChanged) nextAt = time + 0.4;
+      syncBar();
+    },
+    next() { nextAt = time; },
+  };
+  document.addEventListener('visibilitychange', () => (document.hidden ? window.nojam.pause() : window.nojam.resume()));
+
+  // ---------------------------------------------------------------- browser preview controls
+  const bar = document.getElementById('bar');
+  function syncBar() {
+    for (const b of bar.querySelectorAll('button[data-v]')) b.setAttribute('aria-pressed', String(cfg[b.dataset.k] === b.dataset.v));
+  }
+  if (!cfg.saver) {
+    bar.classList.add('show');
+    syncBar();
+    bar.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.k === 'next') return window.nojam.next();
+      window.nojam.set({ [b.dataset.k]: b.dataset.v });
+      const u = new URL(location.href); u.searchParams.set(b.dataset.k, b.dataset.v); history.replaceState(null, '', u);
+    });
+    let idle = 0;
+    const wake = () => { bar.classList.remove('idle'); clearTimeout(idle); idle = setTimeout(() => bar.classList.add('idle'), 2600); };
+    window.addEventListener('pointermove', (e) => { mouse.tx = e.clientX / innerWidth - 0.5; mouse.ty = 0.5 - e.clientY / innerHeight; wake(); });
+    window.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'ArrowRight') window.nojam.next();
+      if (e.key === 'm') window.nojam.set({ mode: cfg.mode === 'drift' ? 'shuffle' : 'drift' });
+      if (e.key === 't') window.nojam.set({ theme: { auto: 'day', day: 'night', night: 'auto' }[cfg.theme] });
+      if (e.key === 'f') document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+      wake();
+    });
+    wake();
+  }
+})();
+</script>
+</body>
+</html>
