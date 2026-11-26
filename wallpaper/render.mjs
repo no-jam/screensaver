@@ -1,6 +1,6 @@
 // Renders the frames of the Nojam dynamic wallpaper with the screensaver's own renderer
 // (../web/index.html, in wallpaper mode), one per hour of the day, as PNGs in frames/.
-//   node render.mjs [width] [height] [frames] [seed] [tone]
+//   node render.mjs [width] [height] [frames] [seed] [tone] [folder]
 // tone: auto (day colours by day, night after dark, the default), light or dark (all day).
 // Needs Playwright with Chromium (npm i playwright && npx playwright install chromium).
 import { createRequire } from 'node:module';
@@ -10,9 +10,9 @@ import { dirname, join } from 'node:path';
 
 const { chromium } = createRequire(import.meta.url)('playwright');
 const here = dirname(fileURLToPath(import.meta.url));
-const [w = 6016, h = 3384, n = 24, seed = 'nojam', tone = 'auto'] = process.argv.slice(2);
+const [w = 6016, h = 3384, n = 24, seed = 'nojam', tone = 'auto', folder] = process.argv.slice(2);
 const page = pathToFileURL(join(here, '../web/index.html')).href;
-const dir = join(here, tone === 'auto' ? 'frames' : `frames-${tone}`);
+const dir = join(here, folder || (tone === 'auto' ? 'frames' : `frames-${tone}`));
 mkdirSync(dir, { recursive: true });
 
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });

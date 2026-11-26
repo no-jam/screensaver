@@ -5,3 +5,7 @@ wallpaper/*.heic
 node_modules/
 wallpaper/frames*/
 mural/out/
+wallpaper/iphone/
+wallpaper/*.zip
+wallpaper/phone-*/
+wallpaper/test-*/
