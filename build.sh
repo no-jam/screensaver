@@ -24,6 +24,14 @@ xcrun lipo -create "$OUT/obj/Nojam-arm64" "$OUT/obj/Nojam-x86_64" -output "$SAVE
 rm -rf "$OUT/obj"
 
 cp macos/Info.plist "$SAVER/Contents/Info.plist"
+# The platform keys Xcode writes into every bundle; macOS reads them when it lists screensavers.
+PL="$SAVER/Contents/Info.plist"
+plutil -insert CFBundleSupportedPlatforms -json '["MacOSX"]' "$PL"
+plutil -insert DTPlatformName -string macosx "$PL"
+plutil -insert DTSDKName -string "macosx$(xcrun --sdk macosx --show-sdk-version)" "$PL"
+plutil -insert DTPlatformVersion -string "$(xcrun --sdk macosx --show-sdk-version)" "$PL"
+plutil -insert BuildMachineOSBuild -string "$(sw_vers -buildVersion)" "$PL"
+plutil -lint "$PL"
 cp web/index.html "$SAVER/Contents/Resources/index.html"
 cp macos/thumbnail.png macos/thumbnail@2x.png "$SAVER/Contents/Resources/"
 
